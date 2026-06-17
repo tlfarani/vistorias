@@ -2,6 +2,8 @@ import streamlit as st
 import geopandas as gpd
 import geobr
 import networkx as nx
+import folium
+from streamlit_folium import st_folium
 from shapely.ops import substring, linemerge, unary_union
 from shapely.geometry import LineString, MultiLineString
 
@@ -20,8 +22,6 @@ st.markdown("Ferramenta automatizada para traçado de rotas sobre trilhos e divi
 def carregar_bases_nacionais():
     """
     Baixa e carrega as bases oficiais do IBGE/ANTT via biblioteca geobr.
-    - read_railway(): Malha ferroviária federal completa.
-    - read_municipal_seat(): Coordenadas (pontos) das sedes de todos os municípios.
     """
     malha_ferroviaria = geobr.read_railway()
     sedes_municipios = geobr.read_municipal_seat()
@@ -35,7 +35,6 @@ with st.spinner("Carregando bases geográficas nacionais do IBGE... (Pode demora
 def extrair_grafo_ferroviario(gdf_ferrovia):
     """
     Transforma as linhas do GeoDataFrame ferroviário em um Grafo do NetworkX.
-    Cada extremidade de linha vira um nó (x, y) e o traçado vira uma aresta com peso (km).
     """
     G = nx.Graph()
     
@@ -50,20 +49,17 @@ def extrair_grafo_ferroviario(gdf_ferrovia):
             
         for linha in list(linhas):
             coords = list(linha.coords)
-            no_inicial = coords[0]   # Coordenada XY de início
-            no_final = coords[-1]    # Coordenada XY de fim
+            no_inicial = coords[0]   
+            no_final = coords[-1]    
             
-            # O comprimento (length) estará em metros se o CRS estiver projetado
             distancia_km = linha.length / 1000  
-            
-            # Adiciona a aresta salvando a geometria original para reconstrução posterior
             G.add_edge(no_inicial, no_final, weight=distancia_km, geometry=linha)
             
     return G
 
 def encontrar_no_mais_proximo(grafo, ponto_cidade):
     """
-    Encontra o nó da malha ferroviária mais próximo da sede do município selecionado.
+    Encontra o nó da malha ferroviária mais próximo da sede do município.
     """
     nos = list(grafo.nodes)
     no_proximo = min(nos, key=lambda no: ponto_cidade.distance(LineString([ponto_cidade, no])))
@@ -73,7 +69,6 @@ def encontrar_no_mais_proximo(grafo, ponto_cidade):
 # --- 3. INTERFACE DO USUÁRIO (SIDEBAR) ---
 st.sidebar.header("1. Seleção de Região")
 
-# Lista de UFs únicas da base
 lista_ufs = sorted(sedes['abbrev_state'].unique())
 uf_selecionada = st.sidebar.selectbox(
     "Selecione a UF de atuação:", 
@@ -81,23 +76,19 @@ uf_selecionada = st.sidebar.selectbox(
     index=lista_ufs.index("SP") if "SP" in lista_ufs else 0
 )
 
-# Filtra os municípios da UF escolhida
 sedes_filtradas = sedes[sedes['abbrev_state'] == uf_selecionada].sort_values(by="name_muni")
 lista_municipios = sedes_filtradas['name_muni'].unique()
 
 st.sidebar.header("2. Rota da Viagem")
 muni_origem = st.sidebar.selectbox("Município de Partida:", lista_municipios)
-# Evita que o destino seja igual à origem na listagem
 muni_destino = st.sidebar.selectbox("Município de Destino:", [m for m in lista_municipios if m != muni_origem])
 
 st.sidebar.header("3. Cronograma")
 datas = st.sidebar.date_input("Período da Vistoria:", [])
 
-# Define a quantidade de trechos (padrão: 1 por dia de trabalho)
 if len(datas) == 2:
     data_ini, data_fim = datas
     dias_trabalho = (data_fim - data_ini).days + 1
-    
     num_trechos = st.sidebar.number_input(
         "Quantidade de trechos a dividir:", 
         min_value=1, 
@@ -113,27 +104,21 @@ else:
 if st.sidebar.button("Calcular Rota e Dividir Trechos", use_container_width=True):
     st.subheader(f"📍 Planejamento Estruturado: {muni_origem} ➡️ {muni_destino} ({uf_selecionada})")
     
-    # Projeta as bases para metros usando SIRGAS 2000 / Policônica (EPSG:5880), ideal para o Brasil
-    with st.spinner("Reprojetando coordenadas para cálculo métrico de precisão..."):
+    with st.spinner("Reprojetando coordenadas para cálculo métrico..."):
         malha_m = malha.to_crs(epsg=5880)
         sedes_m = sedes_filtradas.to_crs(epsg=5880)
     
-    # Resgata os pontos geométricos projetados das sedes de origem e destino
     ponto_origem = sedes_m[sedes_m['name_muni'] == muni_origem].geometry.values[0]
     ponto_destino = sedes_m[sedes_m['name_muni'] == muni_destino].geometry.values[0]
     
-    with st.spinner("Construindo rede lógica de grafos da malha ferroviária..."):
+    with st.spinner("Construindo rede lógica de grafos da malha..."):
         G = extrair_grafo_ferroviario(malha_m)
-        
-        # Faz o "snapping" (atração) das cidades para os nós de trilho mais próximos
         no_origem = encontrar_no_mais_proximo(G, ponto_origem)
         no_destino = encontrar_no_mais_proximo(G, ponto_destino)
     
     try:
-        # Encontra o caminho mais curto sobre os trilhos (Algoritmo de Dijkstra)
         caminho_nos = nx.shortest_path(G, source=no_origem, target=no_destino, weight='weight')
         
-        # Reconstrói as geometrias das linhas do caminho encontrado
         lista_linhas = []
         comprimento_total_km = 0
         for u, v in zip(caminho_nos[:-1], caminho_nos[1:]):
@@ -141,49 +126,108 @@ if st.sidebar.button("Calcular Rota e Dividir Trechos", use_container_width=True
             lista_linhas.append(dados_aresta['geometry'])
             comprimento_total_km += dados_aresta['weight']
             
-        # Une os segmentos de linha em uma única geometria contínua
         rota_unificada = unary_union(lista_linhas)
         if rota_unificada.geom_type == 'MultiLineString':
             rota_unificada = linemerge(rota_unificada)
             
         st.success("Rota real mapeada com sucesso sobre os trilhos!")
         
-        # Exibição de Métricas Gerais
         col1, col2 = st.columns(2)
         col1.metric("Distância Total nos Trilhos", f"{comprimento_total_km:.2f} km")
         col2.metric("Média Diária de Vistoria", f"{(comprimento_total_km / num_trechos):.2f} km/dia")
         
-        # --- 5. FATIAMENTO GEOMÉTRICO (DISTRIBUIÇÃO DIÁRIA) ---
-        st.write("---")
-        st.write(f"### 🗓️ Cronograma Sugerido ({num_trechos} Dias Operacionais):")
-        
+        # --- 5. FATIAMENTO GEOMÉTRICO E COLETA DE DADOS ---
         comprimento_total_metros = rota_unificada.length
         tam_trecho_metros = comprimento_total_metros / num_trechos
+        
+        listagem_trechos_diarios = []
         
         for i in range(num_trechos):
             inicio_m = i * tam_trecho_metros
             fim_m = (i + 1) * tam_trecho_metros
             
-            # Corta o LineString no intervalo exato de metros usando substring do Shapely
             sub_trecho_geom = substring(rota_unificada, inicio_m, fim_m)
             
             km_inicial = inicio_m / 1000
             km_final = fim_m / 1000
             extensao_dia = (fim_m - inicio_m) / 1000
             
-            # Mensagem de saída estruturada para o planejamento
-            st.write(
-                f"• **Dia {i+1}:** Início no **km {km_inicial:.1f}** ➡️ Término no **km {km_final:.1f}** "
-                f"(Extensão do trecho: `{extensao_dia:.1f} km`)"
+            # Guardamos os dados estruturados para criar um GeoDataFrame posterior
+            listagem_trechos_diarios.append({
+                'id_dia': f"Dia {i+1}",
+                'km_inicial': km_inicial,
+                'km_final': km_final,
+                'extensao': extensao_dia,
+                'geometry': sub_trecho_geom
+            })
+            
+        # Transformando a lista fatiada em um GeoDataFrame para plotagem no mapa
+        gdf_cronograma = gpd.GeoDataFrame(listagem_trechos_diarios, crs="EPSG:5880")
+        
+        # Convertendo de volta para graus (WGS84) porque o Folium exige essa projeção
+        gdf_cronograma_wgs84 = gdf_cronograma.to_crs(epsg=4326)
+        
+        # --- 6. CRIAÇÃO E EXIBIÇÃO DO MAPA INTERATIVO ---
+        st.write("---")
+        
+        col_mapa, col_lista = st.columns([2, 1])
+        
+        with col_lista:
+            st.write(f"### 🗓️ Resumo Operacional")
+            for idx, row in gdf_cronograma.iterrows():
+                st.write(
+                    f"• **{row['id_dia']}:** km {row['km_inicial']:.1f} ao km {row['km_final']:.1f} "
+                    f"(`{row['extensao']:.1f} km`)"
+                )
+        
+        with col_mapa:
+            st.write("### 🗺️ Visualização Espacial dos Trechos")
+            
+            # Encontrar o ponto central da rota para focar o mapa dinamicamente
+            centro_mapa = gdf_cronograma_wgs84.unary_union.centroid
+            
+            m = folium.Map(
+                location=[centro_mapa.y, centro_mapa.x], 
+                zoom_start=8, 
+                tiles="OpenStreetMap"
             )
             
-            # Nota técnica: A variável 'sub_trecho_geom' armazena a geometria exata do dia, 
-            # pronta para ser plotada em mapas ou usada em cruzamentos espaciais de risco.
+            # Paleta de cores para diferenciar os dias de viagem
+            cores_paleta = ['blue', 'green', 'red', 'purple', 'orange', 'darkred', 'cadetblue', 'darkpurple']
+            
+            # Inserir cada trecho do GeoDataFrame no mapa Folium
+            for idx, row in gdf_cronograma_wgs84.iterrows():
+                cor_trecho = cores_paleta[idx % len(cores_paleta)]
+                
+                # Transforma a linha do dia em elemento GeoJson do Folium
+                geo_json_features = folium.GeoJson(
+                    row['geometry'].__geo_interface__,
+                    style_function=lambda x, cor=cor_trecho: {
+                        'color': cor,
+                        'weight': 6,
+                        'opacity': 0.85
+                    }
+                )
+                
+                # Adiciona o texto descritivo ao clicar na linha
+                popup_html = f"""
+                <div style='font-family: Arial, sans-serif; width: 160px;'>
+                    <h4 style='margin:0 0 5px 0; color:{cor_trecho};'>{row['id_dia']}</h4>
+                    <b>Início:</b> km {row['km_inicial']:.1f}<br>
+                    <b>Fim:</b> km {row['km_final']:.1f}<br>
+                    <b>Extensão:</b> {row['extensao']:.1f} km
+                </div>
+                """
+                folium.Popup(popup_html, max_width=200).add_to(geo_json_features)
+                geo_json_features.add_to(m)
+                
+            # Renderiza o mapa Folium dentro do layout do Streamlit
+            st_folium(m, height=500, use_container_width=True)
             
     except nx.NetworkXNoPath:
         st.error(
             f"❌ Não foi encontrada uma conexão ferroviária contínua na base de dados entre "
-            f"**{muni_origem}** e **{muni_destino}**. Verifique se os trechos pertencem à mesma malha física."
+            f"**{muni_origem}** e **{muni_destino}**."
         )
     except Exception as e:
         st.error(f"Erro inesperado durante o processamento: {e}")
