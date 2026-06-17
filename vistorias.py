@@ -4,8 +4,8 @@ import geobr
 import networkx as nx
 import folium
 from streamlit_folium import st_folium
-from shapely.ops import substring, linemerge, unary_union
-from shapely.geometry import LineString, MultiLineString
+from shapely.ops import substring
+from shapely.geometry import LineString, Point
 
 # Configuração da página do Streamlit
 st.set_page_config(
@@ -17,22 +17,21 @@ st.set_page_config(
 st.title("🚊 Planejador Nacional de Vistoria Ferroviária (Rede/Grafos)")
 st.markdown("Ferramenta automatizada para traçado de rotas sobre trilhos e divisão de trechos operacionais diários.")
 
-# --- 1. CARREGAMENTO DOS DADOS NACIONAIS (OTIMIZADO COM PARQUET) ---
+# --- 1. CARREGAMENTO DOS DADOS NACIONAIS ---
 @st.cache_data(show_spinner=False)
 def carregar_bases_nacionais():
     """
     Carrega as sedes dos municípios via geobr e a malha ferroviária a partir do arquivo GeoParquet local.
     """
-    # 1. Puxa as sedes dos municípios do IBGE (Nativo e Funcional)
     sedes_municipios = geobr.read_municipal_seat()
     
-    # 2. Carrega a malha ferroviária nacional em formato GeoParquet
     try:
         malha_ferroviaria = gpd.read_parquet("dados/malha_ferroviaria.parquet")
+        # Força a definição do CRS caso o Parquet tenha subido sem ele
+        if malha_ferroviaria.crs is None:
+            malha_ferroviaria.set_crs(epsg=4326, inplace=True)
     except Exception:
-        # Trava de segurança caso o arquivo ainda não tenha sido upado no GitHub
-        st.sidebar.error("❌ Arquivo 'dados/malha_ferroviaria.parquet' não encontrado no repositório!")
-        # Cria um GeoDataFrame dummy apenas para o app abrir a casca visual sem colapsar
+        st.sidebar.error("❌ Arquivo 'dados/malha_ferroviaria.parquet' não encontrado ou corrompido no repositório!")
         malha_ferroviaria = gpd.GeoDataFrame(geometry=[LineString([(0,0), (0,0)])], crs="EPSG:4326")
         
     return malha_ferroviaria, sedes_municipios
@@ -118,9 +117,8 @@ else:
 
 # --- 4. PROCESSAMENTO DA ROTA E CRONOGRAMA DIÁRIO ---
 if st.sidebar.button("Calcular Rota e Dividir Trechos", use_container_width=True):
-    # Verifica se a malha real foi carregada ou se ainda está usando a geometria dummy de erro
     if len(malha) == 1 and malha.geometry.iloc[0].coords[0] == (0,0):
-        st.error("A base de dados ferroviária real está ausente. Certifique-se de fazer o upload do arquivo 'dados/malha_ferroviaria.parquet' no seu GitHub.")
+        st.error("A base de dados ferroviária real está ausente ou vazia.")
     else:
         st.subheader(f"📍 Planejamento Estruturado: {muni_origem} ➡️ {muni_destino} ({uf_selecionada})")
         
@@ -135,107 +133,128 @@ if st.sidebar.button("Calcular Rota e Dividir Trechos", use_container_width=True
             G = extrair_grafo_ferroviario(malha_m)
             no_origem = encontrar_no_mais_proximo(G, ponto_origem)
             no_destino = encontrar_no_mais_proximo(G, ponto_destino)
-        
-        try:
-            caminho_nos = nx.shortest_path(G, source=no_origem, target=no_destino, weight='weight')
             
-            lista_linhas = []
-            comprimento_total_km = 0
-            for u, v in zip(caminho_nos[:-1], caminho_nos[1:]):
-                dados_aresta = G[u][v]
-                lista_linhas.append(dados_aresta['geometry'])
-                comprimento_total_km += dados_aresta['weight']
-                
-            rota_unificada = unary_union(lista_linhas)
-            if rota_unificada.geom_type == 'MultiLineString':
-                rota_unificada = linemerge(rota_unificada)
-                
-            st.success("Rota real mapeada com sucesso sobre os trilhos!")
-            
-            col1, col2 = st.columns(2)
-            col1.metric("Distância Total nos Trilhos", f"{comprimento_total_km:.2f} km")
-            col2.metric("Média Diária de Vistoria", f"{(comprimento_total_km / num_trechos):.2f} km/dia")
-            
-            # --- 5. FATIAMENTO GEOMÉTRICO E COLETA DE DADOS ---
-            comprimento_total_metros = rota_unificada.length
-            tam_trecho_metros = comprimento_total_metros / num_trechos
-            
-            listagem_trechos_diarios = []
-            
-            for i in range(num_trechos):
-                inicio_m = i * tam_trecho_metros
-                fim_m = (i + 1) * tam_trecho_metros
-                
-                sub_trecho_geom = substring(rota_unificada, inicio_m, fim_m)
-                
-                km_inicial = inicio_m / 1000
-                km_final = fim_m / 1000
-                extensao_dia = (fim_m - inicio_m) / 1000
-                
-                listagem_trechos_diarios.append({
-                    'id_dia': f"Dia {i+1}",
-                    'km_inicial': km_inicial,
-                    'km_final': km_final,
-                    'extensao': extensao_dia,
-                    'geometry': sub_trecho_geom
-                })
-                
-            gdf_cronograma = gpd.GeoDataFrame(listagem_trechos_diarios, crs="EPSG:5880")
-            gdf_cronograma_wgs84 = gdf_cronograma.to_crs(epsg=4326)
-            
-            # --- 6. CRIAÇÃO E EXIBIÇÃO DO MAPA INTERATIVO ---
-            st.write("---")
-            col_mapa, col_lista = st.columns([1, 2])
-            
-            with col_mapa:
-                st.write(f"### 🗓️ Resumo Operacional")
-                for idx, row in gdf_cronograma.iterrows():
-                    st.write(
-                        f"• **{row['id_dia']}:** km {row['km_inicial']:.1f} ao km {row['km_final']:.1f} "
-                        f"(`{row['extensao']:.1f} km`)"
-                    )
-            
-            with col_lista:
-                st.write("### 🗺️ Visualização Espacial dos Trechos")
-                centro_mapa = gdf_cronograma_wgs84.unary_union.centroid
-                
-                m = folium.Map(
-                    location=[centro_mapa.y, centro_mapa.x], 
-                    zoom_start=8, 
-                    tiles="OpenStreetMap"
-                )
-                
-                cores_paleta = ['blue', 'green', 'red', 'purple', 'orange', 'darkred', 'cadetblue', 'darkpurple']
-                
-                for idx, row in gdf_cronograma_wgs84.iterrows():
-                    cor_trecho = cores_paleta[idx % len(cores_paleta)]
-                    
-                    geo_json_features = folium.GeoJson(
-                        row['geometry'].__geo_interface__,
-                        style_function=lambda x, cor=cor_trecho: {
-                            'color': cor,
-                            'weight': 6,
-                            'opacity': 0.85
-                        }
-                    )
-                    
-                    popup_html = f"""
-                    <div style='font-family: Arial, sans-serif; width: 160px;'>
-                        <h4 style='margin:0 0 5px 0; color:{cor_trecho};'>{row['id_dia']}</h4>
-                        <b>Início:</b> km {row['km_inicial']:.1f}<br>
-                        <b>Fim:</b> km {row['km_final']:.1f}<br>
-                        <b>Extensão:</b> {row['extensao']:.1f} km
-                    </div>
-                    """
-                    folium.Popup(popup_html, max_width=200).add_to(geo_json_features)
-                    geo_json_features.add_to(m)
-                    
-                st_folium(m, height=500, use_container_width=True)
-                
-        except nx.NetworkXNoPath:
+        # VALIDAÇÃO DE SEGURANÇA: Origem e Destino mapeados para o mesmo lugar
+        if no_origem == no_destino:
             st.error(
-                f"❌ Não foi encontrada uma conexão ferroviária contínua na base de dados entre "
-                f"**{muni_origem}** e **{muni_destino}**."
+                f"⚠️ **Erro de Escala/Topologia:** O algoritmo mapeou a origem ({muni_origem}) e o destino ({muni_destino}) para o mesmo ponto físico da ferrovia.\n\n"
+                f"**Como resolver?** Certifique-se de que o arquivo original convertido para `.parquet` possuía um sistema de coordenadas geográficas válido (como WGS84 - EPSG:4326) antes da conversão."
             )
-        except Exception as e:
-            st.error(f"Erro inesperado durante o processamento: {e}")
+        else:
+            try:
+                # Encontra o caminho mínimo de nós
+                caminho_nos = nx.shortest_path(G, source=no_origem, target=no_destino, weight='weight')
+                
+                # RECONSTRUÇÃO SEQUENCIAL MANUAL (Garante 100% que teremos uma LineString perfeita)
+                lista_pontos = []
+                comprimento_total_km = 0
+                
+                for u, v in zip(caminho_nos[:-1], caminho_nos[1:]):
+                    dados_aresta = G[u][v]
+                    linha_geom = dados_aresta['geometry']
+                    comprimento_total_km += dados_aresta['weight']
+                    
+                    # Alinha a orientação dos pontos para seguir o fluxo da viagem u -> v
+                    pt_inicial_linha = Point(linha_geom.coords[0])
+                    pt_no_u = Point(u)
+                    
+                    if pt_inicial_linha.distance(pt_no_u) > 1e-2:
+                        coords_segmento = list(linha_geom.coords)[::-1]  # Inverte orientação
+                    else:
+                        coords_segmento = list(linha_geom.coords)
+                    
+                    if lista_pontos:
+                        lista_pontos.extend(coords_segmento[1:])  # Evita duplicar o ponto de conexão
+                    else:
+                        lista_pontos.extend(coords_segmento)
+                
+                # Transforma os pontos encadeados diretamente em uma única LineString limpa
+                rota_unificada = LineString(lista_pontos)
+                
+                st.success("Rota real mapeada com sucesso sobre os trilhos!")
+                
+                col1, col2 = st.columns(2)
+                col1.metric("Distância Total nos Trilhos", f"{comprimento_total_km:.2f} km")
+                col2.metric("Média Diária de Vistoria", f"{(comprimento_total_km / num_trechos):.2f} km/dia")
+                
+                # --- 5. FATIAMENTO GEOMÉTRICO E COLETA DE DADOS ---
+                comprimento_total_metros = rota_unificada.length
+                tam_trecho_metros = comprimento_total_metros / num_trechos
+                
+                listagem_trechos_diarios = []
+                
+                for i in range(num_trechos):
+                    inicio_m = i * tam_trecho_metros
+                    fim_m = (i + 1) * tam_trecho_metros
+                    
+                    # Corta o LineString de forma totalmente segura agora
+                    sub_trecho_geom = substring(rota_unificada, inicio_m, fim_m)
+                    
+                    km_inicial = inicio_m / 1000
+                    km_final = fim_m / 1000
+                    extensao_dia = (fim_m - inicio_m) / 1000
+                    
+                    listagem_trechos_diarios.append({
+                        'id_dia': f"Dia {i+1}",
+                        'km_inicial': km_inicial,
+                        'km_final': km_final,
+                        'extensao': extensao_dia,
+                        'geometry': sub_trecho_geom
+                    })
+                    
+                gdf_cronograma = gpd.GeoDataFrame(listagem_trechos_diarios, crs="EPSG:5880")
+                gdf_cronograma_wgs84 = gdf_cronograma.to_crs(epsg=4326)
+                
+                # --- 6. CRIAÇÃO E EXIBIÇÃO DO MAPA INTERATIVO ---
+                st.write("---")
+                col_mapa, col_lista = st.columns([1, 2])
+                
+                with col_mapa:
+                    st.write(f"### 🗓️ Resumo Operacional")
+                    for idx, row in gdf_cronograma.iterrows():
+                        st.write(
+                            f"• **{row['id_dia']}:** km {row['km_inicial']:.1f} ao km {row['km_final']:.1f} "
+                            f"(`{row['extensao']:.1f} km`)"
+                        )
+                
+                with col_lista:
+                    st.write("### 🗺️ Visualização Espacial dos Trechos")
+                    centro_mapa = gdf_cronograma_wgs84.unary_union.centroid
+                    
+                    m = folium.Map(
+                        location=[centro_mapa.y, centro_mapa.x], 
+                        zoom_start=8, 
+                        tiles="OpenStreetMap"
+                    )
+                    
+                    cores_paleta = ['blue', 'green', 'red', 'purple', 'orange', 'darkred', 'cadetblue', 'darkpurple']
+                    
+                    for idx, row in gdf_cronograma_wgs84.iterrows():
+                        cor_trecho = cores_paleta[idx % len(cores_paleta)]
+                        
+                        geo_json_features = folium.GeoJson(
+                            row['geometry'].__geo_interface__,
+                            style_function=lambda x, cor=cor_trecho: {
+                                'color': cor,
+                                'weight': 6,
+                                'opacity': 0.85
+                            }
+                        )
+                        
+                        popup_html = f"""
+                        <div style='font-family: Arial, sans-serif; width: 160px;'>
+                            <h4 style='margin:0 0 5px 0; color:{cor_trecho};'>{row['id_dia']}</h4>
+                            <b>Início:</b> km {row['km_inicial']:.1f}<br>
+                            <b>Fim:</b> km {row['km_final']:.1f}<br>
+                            <b>Extensão:</b> {row['extensao']:.1f} km
+                        </div>
+                        """
+                        folium.Popup(popup_html, max_width=200).add_to(geo_json_features)
+                        geo_json_features.add_to(m)
+                        
+                    st_folium(m, height=500, use_container_width=True)
+                    
+            except nx.NetworkXNoPath:
+                st.error(f"❌ Não foi encontrada uma conexão ferroviária contínua na base de dados entre **{muni_origem}** e **{muni_destino}**.")
+            except Exception as e:
+                st.error(f"Erro inesperado durante o processamento: {e}")
