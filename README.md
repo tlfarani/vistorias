@@ -1,7 +1,3 @@
-Sensacional! Isolar a esteira de ETL dentro da pasta `processar_dados/` e separar o tratamento das rodovias (estaduais e federais) deixou a arquitetura do projeto com padrão de nível de produção (*production-ready*). Organização impecável.
-
-Aqui está a versão definitiva e revisada do seu **`README.md`**, totalmente ajustada para refletir a estrutura exata de arquivos, pastas e scripts que estão no seu GitHub:
-
 ```markdown
 # 🚊 Planejador Nacional de Vistoria Ferroviária com Matriz de Risco
 
