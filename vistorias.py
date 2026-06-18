@@ -16,7 +16,7 @@ st.set_page_config(
 )
 
 st.title("🚊 Planejador de Vistoria Ferroviária com Matriz de Risco")
-st.markdown("Análise multicritério interestadual com mapeamento de Pontes, Passagens de Nível (PN) e Pátios.")
+st.markdown("Análise multicritério interestadual com auditoria de camadas e captura de coordenadas.")
 
 # --- 1. INICIALIZAÇÃO DA MEMÓRIA DO APP ---
 if "dados_calculados" not in st.session_state:
@@ -168,7 +168,7 @@ if st.sidebar.button("Calcular Rota e Priorizar Trechos", use_container_width=Tr
                     margin = 0.08
                     bbox_expandida = (bbox_rota[0]-margin, bbox_rota[1]-margin, bbox_rota[2]+margin, bbox_rota[3]+margin)
                     
-                    # Carregamento de dados
+                    # Carregamento cirúrgico de dados
                     ucs, log_uc = carregar_camada_com_telemetria("dados/unidades_conservacao.parquet", bbox_expandida, "Unidades de Conservação")
                     tis, log_ti = carregar_camada_com_telemetria("dados/terras_indigenas.parquet", bbox_expandida, "Terras Indígenas")
                     riscos, log_risco = carregar_camada_com_telemetria("dados/areas_risco.parquet", bbox_expandida, "Áreas de Risco (CPRM)")
@@ -201,7 +201,7 @@ if st.sidebar.button("Calcular Rota e Priorizar Trechos", use_container_width=Tr
                         col_nome_patio = [c for c in hit_patios.columns if 'nome' in c or 'patio' in c or 'oficina' in c]
                         nomes_patios = hit_patios[col_nome_patio[0]].unique().tolist() if (not hit_patios.empty and col_nome_patio) else []
                         
-                        # Extração de intersecções exatas
+                        # Extração de pontos de intersecção exatos
                         list_pn_coords = []
                         if not rodovias.empty:
                             rod_hits = rodovias[rodovias.intersects(sub_trecho_wgs)]
@@ -244,13 +244,19 @@ if st.sidebar.button("Calcular Rota e Priorizar Trechos", use_container_width=Tr
                         
                     gdf_cronograma = gpd.GeoDataFrame(listagem_trechos_diarios, crs="EPSG:5880")
                     
-                    # SALVA TAMBÉM OS VETORES DE RIOS E RODOVIAS RE CORTADOS PARA AUDITORIA NO MAPA
+                    # SALVA OS GEODATAFRAMES INTEIROS EM WGS84 NA MEMÓRIA PARA SEREM TOGGLEABLES NO MAPA
                     st.session_state.dados_calculados = {
                         "muni_origem": muni_origem, "muni_destino": muni_destino,
                         "uf_origem": uf_origem, "uf_destino": uf_destino,
                         "comprimento_total_km": comprimento_total_km, "num_trechos": num_trechos,
                         "gdf_cronograma_wgs84": gdf_cronograma.to_crs(epsg=4326),
+                        "ucs_wgs84": ucs if not ucs.empty else None,
+                        "tis_wgs84": tis if not tis.empty else None,
+                        "riscos_wgs84": riscos if not riscos.empty else None,
                         "rios_wgs84": rios if not rios.empty else None,
+                        "setores_wgs84": setores if not setores.empty else None,
+                        "rodovias_wgs84": rodovias if not rodovias.empty else None,
+                        "patios_wgs84": patios if not patios.empty else None,
                         "logs_diagnostico": painel_logs
                     }
                 except nx.NetworkXNoPath:
@@ -295,44 +301,84 @@ if st.session_state.dados_calculados is not None:
             centro_mapa = gdf_wgs84.unary_union.centroid
             m = folium.Map(location=[centro_mapa.y, centro_mapa.x], zoom_start=8, tiles="CartoDB positron")
             
-            # NOVO: ADICIONA CAPTURA DE COORDENADAS POR CLIQUE NO MAPA (LatLngPopup)
+            # 1. ATIVA PLUGIN DE CAPTURA DE COORDENADAS POR CLIQUE (LatLngPopup)
             m.add_child(folium.LatLngPopup())
             
-            # NOVO: SE EXISTIREM RIOS NO CACHE, PLOTA A CAMADA VETORIAL PARA AUDITORIA VISUAL
-            if dados.get("rios_wgs84") is not None:
+            # 2. INJEÇÃO DAS CAMADAS VETORIAIS DE AUDITORIA (VEM VIA GEOPANDAS DIRETO - MUITO MAIS ESTÁVEL)
+            # Nota: Iniciam como show=False para o mapa abrir limpo. Marque na legenda para ligar.
+            if dados.get("rios_wgs84") is not None and not dados["rios_wgs84"].empty:
                 folium.GeoJson(
-                    dados["rios_wgs84"].__geo_interface__,
-                    name="🌊 Rios Principais (Base Parquet)",
-                    style_function=lambda x: {'color': '#1d70b8', 'weight': 2.5, 'opacity': 0.75}
+                    dados["rios_wgs84"], name="💧 Hidrografia (Rios Parquet)", show=True,
+                    style_function=lambda x: {'color': '#1d70b8', 'weight': 2.5, 'opacity': 0.8},
+                    tooltip=folium.GeoJsonTooltip(fields=['nome_rio'] if 'nome_rio' in dados["rios_wgs84"].columns else [], aliases=['Rio: '])
                 ).add_to(m)
-            
-            # Desenha os trechos coloridos da ferrovia
+                
+            if dados.get("ucs_wgs84") is not None and not dados["ucs_wgs84"].empty:
+                folium.GeoJson(
+                    dados["ucs_wgs84"], name="🌳 Unidades de Conservação (UC)", show=False,
+                    style_function=lambda x: {'color': 'green', 'fillColor': 'green', 'fillOpacity': 0.15, 'weight': 1},
+                    tooltip=folium.GeoJsonTooltip(fields=['nome_uc'] if 'nome_uc' in dados["ucs_wgs84"].columns else [], aliases=['UC: '])
+                ).add_to(m)
+                
+            if dados.get("tis_wgs84") is not None and not dados["tis_wgs84"].empty:
+                folium.GeoJson(
+                    dados["tis_wgs84"], name="🏹 Terras Indígenas (TI)", show=False,
+                    style_function=lambda x: {'color': 'darkred', 'fillColor': 'red', 'fillOpacity': 0.2, 'weight': 1},
+                    tooltip=folium.GeoJsonTooltip(fields=['nome_ti'] if 'nome_ti' in dados["tis_wgs84"].columns else [], aliases=['Terra Indígena: '])
+                ).add_to(m)
+                
+            if dados.get("riscos_wgs84") is not None and not dados["riscos_wgs84"].empty:
+                folium.GeoJson(
+                    dados["riscos_wgs84"], name="⚠️ Áreas de Risco (CPRM)", show=False,
+                    style_function=lambda x: {'color': 'orange', 'fillColor': 'yellow', 'fillOpacity': 0.15, 'weight': 1},
+                    tooltip=folium.GeoJsonTooltip(fields=['classe_risco'] if 'classe_risco' in dados["riscos_wgs84"].columns else [], aliases=['Risco: '])
+                ).add_to(m)
+                
+            if dados.get("rodovias_wgs84") is not None and not dados["rodovias_wgs84"].empty:
+                folium.GeoJson(
+                    dados["rodovias_wgs84"], name="🛣️ Malha Rodoviária", show=False,
+                    style_function=lambda x: {'color': '#707070', 'weight': 1.5, 'opacity': 0.6}
+                ).add_to(m)
+                
+            if dados.get("setores_wgs84") is not None and not dados["setores_wgs84"].empty:
+                folium.GeoJson(
+                    dados["setores_wgs84"], name="👥 Setores Censitários (IBGE)", show=False,
+                    style_function=lambda x: {'color': 'purple', 'weight': 0.6, 'fillOpacity': 0.05, 'opacity': 0.4}
+                ).add_to(m)
+                
+            if dados.get("patios_wgs84") is not None and not dados["patios_wgs84"].empty:
+                folium.GeoJson(
+                    dados["patios_wgs84"], name="🏢 Pátios e Oficinas", show=False,
+                    style_function=lambda x: {'color': 'black', 'fillColor': 'gray', 'fillOpacity': 0.4, 'weight': 1}
+                ).add_to(m)
+
+            # 3. Desenha os trechos fatiados da ferrovia por cima das camadas base
             for idx, row in gdf_wgs84.iterrows():
                 cor = row['cor_rgb']
                 geo_json_features = folium.GeoJson(
                     row['geometry'].__geo_interface__,
-                    name=f"Trilhos - {row['id_dia']}",
+                    name=f"🛤️ {row['id_dia']}",
                     style_function=lambda x, c=cor: {'color': c, 'weight': 6, 'opacity': 0.9}
                 )
                 popup_html = f"<b>{row['id_dia']}</b><br>Score: {row['score_num']:.2f}<br>Pontes: {len(row['pontes_pontes'])}"
                 folium.Popup(popup_html, max_width=200).add_to(geo_json_features)
                 geo_json_features.add_to(m)
                 
-                # Plotagem das Passagens de Nível
+                # Plotagem das Passagens de Nível (Pontos Laranjas)
                 for pt in row['pn_pontos']:
                     folium.CircleMarker(
                         location=pt, radius=4.5, color='black', fill=True, fill_color='orange', fill_opacity=1,
                         popup="🛣️ Passagem de Nível (Cruzamento Rodoviário)"
                     ).add_to(m)
                     
-                # Plotagem das Pontes sobre Rios
+                # Plotagem das Pontes sobre Rios (Pontos Cianos)
                 for pt_rio in row['pontes_pontes']:
                     folium.CircleMarker(
                         location=pt_rio, radius=4.5, color='darkblue', fill=True, fill_color='cyan', fill_opacity=1,
                         popup="🌉 Ponte Ferroviária (Cruzamento de Rio Principal)"
                     ).add_to(m)
             
-            # Habilita o painel de ligar/desligar camadas no canto do mapa
+            # Habilita a árvore de camadas interativas no canto superior direito
             folium.LayerControl(position='topright', collapsed=False).add_to(m)
                 
             st_folium(m, height=580, use_container_width=True)
