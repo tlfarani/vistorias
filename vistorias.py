@@ -15,7 +15,7 @@ st.set_page_config(
     page_icon="🚊"
 )
 
-st.title("🚊 Planejador de Vistoria Ferroviária com Matriz de Risco")
+st.title("🚊 ViaPrev: Planejador de Vistoria Ferroviária com Matriz de Risco")
 st.markdown("Análise multicritério interestadual com identificação de Alvos Críticos de 1 km para vistoria in loco.")
 
 # --- 1. INICIALIZAÇÃO DA MEMÓRIA DO APP ---
