@@ -94,7 +94,3 @@ Para manter a aplicação responsiva rodando sob os limites de hardware do Strea
 3. **Conversão Binária para GeoParquet:** Os arquivos brutos em Shapefiles e vetores pesados são comprimidos e salvos na pasta `dados/` no formato colunar `.parquet`. O arquivo de ferrovias, por exemplo, consolida-se em **12.73 MB**, mantendo todas as coordenadas milimétricas originais intactas para não quebrar a integridade topológica dos nós do grafo.
 
 ```
-
-Pode criar o seu arquivo `README.md` na raiz e colar este conteúdo. O seu repositório está impecável e documentado no mais alto nível técnico!
-
-```
