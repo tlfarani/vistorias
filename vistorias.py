@@ -239,6 +239,11 @@ if st.sidebar.button("Calcular Rota e Priorizar Trechos", use_container_width=Tr
                             gdf_micro_m = gpd.GeoDataFrame(geometry=[micro_geom], crs="EPSG:5880")
                             m_buffer_wgs = gdf_micro_m.buffer(200).to_crs(epsg=4326).iloc[0]
                             
+                            # --- TELEMETRIA EXATA DE COORDENADAS DO HOTSPOT ---
+                            c_lista = list(micro_geom.coords)
+                            gdf_pts_micro = gpd.GeoDataFrame(geometry=[Point(c_lista[0]), Point(c_lista[-1])], crs="EPSG:5880").to_crs(epsg=4326)
+                            coords_str = f"Lat/Lon Inicial: [{gdf_pts_micro.geometry.iloc[0].y:.5f}, {gdf_pts_micro.geometry.iloc[0].x:.5f}] ➡️ Final: [{gdf_pts_micro.geometry.iloc[1].y:.5f}, {gdf_pts_micro.geometry.iloc[1].x:.5f}]"
+                            
                             m_ucs = ucs[ucs.intersects(m_buffer_wgs)]['nome_uc'].unique().tolist() if not ucs.empty else []
                             m_tis = tis[tis.intersects(m_buffer_wgs)]['nome_ti'].unique().tolist() if not tis.empty else []
                             m_riscos = riscos[riscos.intersects(m_buffer_wgs)]['classe_risco'].unique().tolist() if not riscos.empty else []
@@ -253,25 +258,16 @@ if st.sidebar.button("Calcular Rota e Priorizar Trechos", use_container_width=Tr
                             
                             score_micro = ((m_n_ti * w_ti) + (m_n_risco * w_risco) + (m_n_uc * w_uc) + (m_n_setor * w_setores) + (m_n_rio * w_rios)) / soma_pesos
                             
-                            # --- CORREÇÃO CIRÚRGICA: Montagem dinâmica e segura do resumo de interferências ---
-                            if m_ucs and m_riscos:
-                                resumo = f"🌳 UC: {m_ucs[0][:15]}... | ⚠️ Risco: {m_riscos[0]}"
-                            elif m_ucs:
-                                resumo = f"🌳 UC: {m_ucs[0][:25]}..."
-                            elif m_riscos:
-                                resumo = f"⚠️ Risco CPRM: {m_riscos[0]}"
-                            elif m_tis:
-                                resumo = f"🏹 TI: {m_tis[0][:25]}..."
-                            else:
-                                resumo = "Baixa interferência socioambiental direta"
+                            # Montagem limpa e segura do resumo de interferências
+                            if m_ucs and m_riscos: resumo = f"🌳 UC: {m_ucs[0][:15]}... | ⚠️ Risco: {m_riscos[0]}"
+                            elif m_ucs: resumo = f"🌳 UC: {m_ucs[0][:25]}..."
+                            elif m_riscos: resumo = f"⚠️ Risco CPRM: {m_riscos[0]}"
+                            elif m_tis: resumo = f"🏹 TI: {m_tis[0][:25]}..."
+                            else: resumo = "Baixa interferência socioambiental direta nos trilhos"
                             
                             micro_chunks_dia.append({
-                                'id_dia': f"Dia {i+1}",
-                                'km_inicial': micro_start / 1000,
-                                'km_final': micro_end / 1000,
-                                'score_num': score_micro,
-                                'resumo_interf': resumo,
-                                'geometry': micro_geom
+                                'id_dia': f"Dia {i+1}", 'km_inicial': micro_start / 1000, 'km_final': micro_end / 1000,
+                                'score_num': score_micro, 'resumo_interf': resumo, 'coords_str': coords_str, 'geometry': micro_geom
                             })
                             micro_start += 1000.0
                         
@@ -291,8 +287,6 @@ if st.sidebar.button("Calcular Rota e Priorizar Trechos", use_container_width=Tr
                         })
                         
                     gdf_cronograma = gpd.GeoDataFrame(listagem_trechos_diarios, crs="EPSG:5880")
-                    
-                    # BLINDAGEM ADICIONAL: Definição clara da coluna geométrica ativa
                     gdf_top_micros = gpd.GeoDataFrame(todos_os_top_micros, geometry='geometry', crs="EPSG:5880")
                     
                     st.session_state.dados_calculados = {
@@ -325,20 +319,12 @@ if st.session_state.dados_calculados is not None:
         col1.metric("Distância Total nos Trilhos", f"{dados['comprimento_total_km']:.2f} km")
         col2.metric("Média de Deslocamento Diário", f"{(dados['comprimento_total_km'] / dados['num_trechos']):.2f} km/dia")
         
-        if "logs_diagnostico" in dados:
-            with st.expander("🛠️ Painel de Diagnóstico e Logs de Leitura Geográfica"):
-                st.markdown("Verifique abaixo o comportamento de carregamento das camadas geográficas Parquet:")
-                for log in dados["logs_diagnostico"]:
-                    st.markdown(f"**🔹 Camada:** {log['camada']} | **Status:** {log['status']} | **Feições na Rota:** `{log['registros']}`")
-        
         st.write("---")
         col_lista, col_mapa = st.columns([4, 5])
         
         with col_lista:
             st.write("### 🗓️ Matriz de Sensibilidade e Alvos de Fiscalização")
             gdf_wgs84 = dados['gdf_cronograma_wgs84']
-            
-            # BLINDAGEM CONTRA CACHE VELHO: Captura de forma segura a nova camada usando .get()
             gdf_micros_wgs84 = dados.get('gdf_top_micros_wgs84', None)
             
             for idx, row in gdf_wgs84.iterrows():
@@ -349,17 +335,18 @@ if st.session_state.dados_calculados is not None:
                 else: st.success(f"🔵 {texto_trecho}")
                 
                 with st.expander("Ver Cruzamentos e Hotspots de 1 km (Alvos In Loco)"):
-                    # Executa a listagem fina se os dados novos existirem em memória
                     if gdf_micros_wgs84 is not None and not gdf_micros_wgs84.empty:
                         st.markdown("🎯 **Top 5 Trechos de 1 km mais Sensíveis para Vistoria Prática:**")
                         micros_do_dia = gdf_micros_wgs84[gdf_micros_wgs84['id_dia'] == row['id_dia']]
                         for m_idx, m_row in micros_do_dia.iterrows():
-                            st.markdown(f"   • 📍 **km {m_row['km_inicial']:.1f} ao {m_row['km_final']:.1f}** — Score: `{m_row['score_num']:.2f}` ({m_row['resumo_interf']})")
+                            st.markdown(f"   • **📍 km {m_row['km_inicial']:.1f} ao {m_row['km_final']:.1f}** — Score do Índice: `{m_row['score_num']:.2f}`")
+                            st.markdown(f"     ↳ *Itens Sensíveis:* `{m_row['resumo_interf']}`")
+                            st.markdown(f"     ↳ *Coordenadas:* `{m_row['coords_str']}`")
                     else:
-                        st.caption("⚠️ Alvos de 1km indisponíveis na memória residual. Clique em 'Calcular Rota' para gerar os novos hotspots.")
+                        st.caption("⚠️ Alvos de 1km indisponíveis na memória residual. Clique em 'Calcular Rota' para gerar.")
                     
                     st.write("---")
-                    st.markdown(f"🛣️ **Passagens de Nível:** `{len(row['pn_pontos'])}` | 🌉 **Pontes sobre Rios:** `{len(row['pontes_pontes'])}`")
+                    st.markdown(f"🛣️ **Passagens de Nível:** `{len(row['pn_pontos'])}` | 🌉 **Pontes sobre Rios:** `{len(row['pontes_pontes'])}` | 🏢 **Estruturas/Pátios:** {row['interf_patios']}")
                     st.caption(f"⚠️ **CPRM:** {row['interf_risco']} | 🌳 **UCs:** {row['interf_uc']}")
                 st.write("")
         
@@ -370,14 +357,21 @@ if st.session_state.dados_calculados is not None:
             
             m.add_child(folium.LatLngPopup())
             
-            if dados.get("rios_wgs84") is not None and not dados["rios_wgs84"].empty:
-                folium.GeoJson(dados["rios_wgs84"], name="💧 Hidrografia (Parquet)", show=True, style_function=lambda x: {'color': '#1d70b8', 'weight': 2}).add_to(m)
-            if dados.get("ucs_wgs84") is not None and not dados["ucs_wgs84"].empty:
-                folium.GeoJson(dados["ucs_wgs84"], name="🌳 Unidades de Conservação", show=False, style_function=lambda x: {'color': 'green', 'fillColor': 'green', 'fillOpacity': 0.1, 'weight': 1}).add_to(m)
-            if dados.get("riscos_wgs84") is not None and not dados["riscos_wgs84"].empty:
-                folium.GeoJson(dados["riscos_wgs84"], name="⚠️ Áreas de Risco (CPRM)", show=False, style_function=lambda x: {'color': 'orange', 'fillColor': 'yellow', 'fillOpacity': 0.1, 'weight': 1}).add_to(m)
-            if dados.get("rodovias_wgs84") is not None and not dados["rodovias_wgs84"].empty:
-                folium.GeoJson(dados["rodovias_wgs84"], name="🛣️ Malha Rodoviária", show=False, style_function=lambda x: {'color': '#707070', 'weight': 1.2}).add_to(m)
+            # --- CORREÇÃO DA LEGENDA CONVENIENTE (TOGGLES SEGUROS SEMPRE ATIVOS) ---
+            df_rios = dados.get("rios_wgs84") if dados.get("rios_wgs84") is not None else gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+            folium.GeoJson(df_rios, name="💧 Hidrografia (Parquet)", show=True, style_function=lambda x: {'color': '#1d70b8', 'weight': 2}).add_to(m)
+            
+            df_ucs = dados.get("ucs_wgs84") if dados.get("ucs_wgs84") is not None else gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+            folium.GeoJson(df_ucs, name="🌳 Unidades de Conservação", show=False, style_function=lambda x: {'color': 'green', 'fillColor': 'green', 'fillOpacity': 0.1, 'weight': 1}).add_to(m)
+            
+            df_riscos = dados.get("riscos_wgs84") if dados.get("riscos_wgs84") is not None else gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+            folium.GeoJson(df_riscos, name="⚠️ Áreas de Risco (CPRM)", show=False, style_function=lambda x: {'color': 'orange', 'fillColor': 'yellow', 'fillOpacity': 0.1, 'weight': 1}).add_to(m)
+            
+            df_rodovias = dados.get("rodovias_wgs84") if dados.get("rodovias_wgs84") is not None else gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+            folium.GeoJson(df_rodovias, name="🛣️ Malha Rodoviária", show=False, style_function=lambda x: {'color': '#707070', 'weight': 1.2}).add_to(m)
+            
+            df_patios = dados.get("patios_wgs84") if dados.get("patios_wgs84") is not None else gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+            folium.GeoJson(df_patios, name="🏢 Estruturas e Pátios Ferroviários", show=False, style_function=lambda x: {'color': 'black', 'fillColor': 'gray', 'fillOpacity': 0.4, 'weight': 1.5}).add_to(m)
 
             # 1. Linhas de base por dia
             for idx, row in gdf_wgs84.iterrows():
@@ -392,17 +386,11 @@ if st.session_state.dados_calculados is not None:
                 for pt_rio in row['pontes_pontes']:
                     folium.CircleMarker(location=pt_rio, radius=4, color='darkblue', fill=True, fill_color='cyan', popup="🌉 Ponte Ferroviária").add_to(m)
             
-            # 2. BLINDAGEM DE EXIBIÇÃO: Desenha os alvos neon apenas se presentes
+            # 2. Hotspots de 1 km em Magenta Neon
             if gdf_micros_wgs84 is not None and not gdf_micros_wgs84.empty:
                 folium.GeoJson(
-                    gdf_micros_wgs84,
-                    name="🎯 Alvos Críticos de Vistoria (1 km)",
-                    show=True,
-                    style_function=lambda x: {
-                        'color': '#ff007f',
-                        'weight': 10,
-                        'opacity': 0.95
-                    },
+                    gdf_micros_wgs84, name="🎯 Alvos Críticos de Vistoria (1 km)", show=True,
+                    style_function=lambda x: {'color': '#ff007f', 'weight': 10, 'opacity': 0.95},
                     tooltip=folium.GeoJsonTooltip(fields=['id_dia', 'km_inicial', 'km_final', 'score_num'], aliases=['Dia: ', 'km Inicial: ', 'km Final: ', 'Score do Alvo: '])
                 ).add_to(m)
             
