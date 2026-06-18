@@ -61,8 +61,8 @@ def encontrar_no_mais_proximo(grafo, ponto_cidade):
     return min(nos, key=lambda no: (no[0] - cx)**2 + (no[1] - cy)**2)
 
 def carregar_camada_com_telemetria(caminho_parquet, bbox_wgs84, nome_camada):
-    """Carrega dados geográficos com validação contra falsos zeros e logs de execução."""
-    log = {"camada": nome_camada, "status": "Não executado", "registros": 0, "detalhes": ""}
+    """Carrega dados geográficos com validação contra falsos zeros."""
+    log = {"camada": nome_camada, "status": "Não executado", "registros": 0}
     if not os.path.exists(caminho_parquet):
         log["status"] = "⚠️ Arquivo opcional ausente"
         return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326"), log
@@ -72,7 +72,7 @@ def carregar_camada_com_telemetria(caminho_parquet, bbox_wgs84, nome_camada):
         log["status"] = "🟢 Sucesso (BBox Nativo)"
         log["registros"] = len(gdf)
         if len(gdf) == 0:
-            log["status"] = "干 Acionado Fallback"
+            log["status"] = "🟡 Acionado Fallback"
             gdf_completo = gpd.read_parquet(caminho_parquet)
             gdf_completo = gdf_completo.to_crs(epsg=4326) if gdf_completo.crs is not None else gdf_completo.set_crs(epsg=4326)
             area_busca = box(*bbox_wgs84)
@@ -88,12 +88,12 @@ def carregar_camada_com_telemetria(caminho_parquet, bbox_wgs84, nome_camada):
             log["registros"] = len(gdf)
             log["status"] = "🟢 Sucesso (Mapeamento RAM)"
             return gdf, log
-        except Exception as e:
+        except Exception:
             log["status"] = "🔴 Falha Crítica"
             return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326"), log
 
 
-# --- 4. INTERFACE DO USUÁRIO (SIDEBAR INTERESTADUAL BLINDADA) ---
+# --- 4. INTERFACE DO USUÁRIO ---
 st.sidebar.header("1. Origem e Destino (Interestadual)")
 lista_ufs = sorted(sedes['abbrev_state'].unique())
 
@@ -133,7 +133,7 @@ w_setores = st.sidebar.slider("👥 Adensamento / Censo", 1, 5, value=2)
 w_rios = st.sidebar.slider("💧 Hidrografia / Rios", 1, 5, value=2)
 
 
-# --- 5. MOTOR DE CÁLCULO, INTERSECÇÕES E ANÁLISE MULTICRITÉRIO ---
+# --- 5. MOTOR DE CÁLCULO E ANÁLISE MULTICRITÉRIO ---
 if st.sidebar.button("Calcular Rota e Priorizar Trechos", use_container_width=True):
     if len(malha) == 1 and malha.geometry.iloc[0].coords[0] == (0,0):
         st.error("A base ferroviária está ausente.")
@@ -168,7 +168,7 @@ if st.sidebar.button("Calcular Rota e Priorizar Trechos", use_container_width=Tr
                     margin = 0.08
                     bbox_expandida = (bbox_rota[0]-margin, bbox_rota[1]-margin, bbox_rota[2]+margin, bbox_rota[3]+margin)
                     
-                    # CARREGAMENTO COMPLETO DA MATRIZ DE DADOS SENSÍVEIS E LOGÍSTICOS
+                    # Carregamento de dados
                     ucs, log_uc = carregar_camada_com_telemetria("dados/unidades_conservacao.parquet", bbox_expandida, "Unidades de Conservação")
                     tis, log_ti = carregar_camada_com_telemetria("dados/terras_indigenas.parquet", bbox_expandida, "Terras Indígenas")
                     riscos, log_risco = carregar_camada_com_telemetria("dados/areas_risco.parquet", bbox_expandida, "Áreas de Risco (CPRM)")
@@ -191,19 +191,17 @@ if st.sidebar.button("Calcular Rota e Priorizar Trechos", use_container_width=Tr
                         sub_trecho_wgs = gdf_seg_m.to_crs(epsg=4326).geometry.iloc[0]
                         buffer_wgs = gdf_seg_m.buffer(200).to_crs(epsg=4326).iloc[0]
                         
-                        # Cruzamentos Ambientais Standard
                         hit_ucs = ucs[ucs.intersects(buffer_wgs)]['nome_uc'].unique().tolist() if not ucs.empty else []
                         hit_tis = tis[tis.intersects(buffer_wgs)]['nome_ti'].unique().tolist() if not tis.empty else []
                         hit_riscos = riscos[riscos.intersects(buffer_wgs)]['classe_risco'].unique().tolist() if not riscos.empty else []
                         hit_rios = rios[rios.intersects(buffer_wgs)]['nome_rio'].unique().tolist() if not rios.empty else []
                         count_setores = len(setores[setores.intersects(buffer_wgs)]) if not setores.empty else 0
                         
-                        # Cruzamento Logístico: Pátios e Oficinas na faixa de domínio
                         hit_patios = patios[patios.intersects(buffer_wgs)] if not patios.empty else gpd.GeoDataFrame()
                         col_nome_patio = [c for c in hit_patios.columns if 'nome' in c or 'patio' in c or 'oficina' in c]
                         nomes_patios = hit_patios[col_nome_patio[0]].unique().tolist() if (not hit_patios.empty and col_nome_patio) else []
                         
-                        # --- EXTRATOR MATEMÁTICO DE PONTOS DE INTERSECÇÃO (PONTES E PNs) ---
+                        # Extração de intersecções exatas
                         list_pn_coords = []
                         if not rodovias.empty:
                             rod_hits = rodovias[rodovias.intersects(sub_trecho_wgs)]
@@ -222,7 +220,6 @@ if st.sidebar.button("Calcular Rota e Priorizar Trechos", use_container_width=Tr
                                     if g.geom_type == 'Point': list_pontes_coords.append((g.y, g.x))
                                     elif g.geom_type == 'MultiPoint': list_pontes_coords.extend([(p.y, p.x) for p in g.geoms])
                         
-                        # --- MATRIZ MULTICRITÉRIO DO SCORE ---
                         nota_ti = 10.0 if len(hit_tis) > 0 else 0.0
                         nota_uc = 8.0 if len(hit_ucs) > 0 else 0.0
                         nota_rio = 5.0 if len(hit_rios) > 0 else 0.0
@@ -231,14 +228,10 @@ if st.sidebar.button("Calcular Rota e Priorizar Trechos", use_container_width=Tr
                         
                         soma_pesos = w_ti + w_risco + w_uc + w_setores + w_rios
                         score_final = ((nota_ti * w_ti) + (nota_risco * w_risco) + (nota_uc * w_uc) + (nota_setor * w_setores) + (nota_rio * w_rios)) / soma_pesos
-                        
                         criticidade, cor = ("CRÍTICA", "red") if score_final >= 4.5 else (("ALTA", "orange") if score_final >= 2.5 else (("MÉDIA", "yellow") if score_final >= 0.8 else ("BAIXA", "blue")))
                         
                         listagem_trechos_diarios.append({
-                            'id_dia': f"Dia {i+1}",
-                            'km_inicial': inicio_m / 1000,
-                            'km_final': fim_m / 1000,
-                            'extensao': sub_trecho_geom.length / 1000,
+                            'id_dia': f"Dia {i+1}", 'km_inicial': inicio_m / 1000, 'km_final': fim_m / 1000, 'extensao': sub_trecho_geom.length / 1000,
                             'criticidade': criticidade, 'score_num': score_final, 'cor_rgb': cor,
                             'interf_uc': ", ".join(hit_ucs) if hit_ucs else "Nenhuma",
                             'interf_ti': ", ".join(hit_tis) if hit_tis else "Nenhuma",
@@ -246,21 +239,22 @@ if st.sidebar.button("Calcular Rota e Priorizar Trechos", use_container_width=Tr
                             'interf_rios': ", ".join(hit_rios) if hit_rios else "Nenhum grande rio",
                             'interf_setores': f"{count_setores} setores urbanos cruzados",
                             'interf_patios': ", ".join(nomes_patios) if nomes_patios else "Nenhum pátio na faixa de domínio",
-                            'pn_pontos': list_pn_coords, 'pontes_pontes': list_pontes_coords,
-                            'geometry': sub_trecho_geom
+                            'pn_pontos': list_pn_coords, 'pontes_pontes': list_pontes_coords, 'geometry': sub_trecho_geom
                         })
                         
                     gdf_cronograma = gpd.GeoDataFrame(listagem_trechos_diarios, crs="EPSG:5880")
-                    gdf_cronograma_wgs84 = gdf_cronograma.to_crs(epsg=4326)
                     
+                    # SALVA TAMBÉM OS VETORES DE RIOS E RODOVIAS RE CORTADOS PARA AUDITORIA NO MAPA
                     st.session_state.dados_calculados = {
                         "muni_origem": muni_origem, "muni_destino": muni_destino,
                         "uf_origem": uf_origem, "uf_destino": uf_destino,
                         "comprimento_total_km": comprimento_total_km, "num_trechos": num_trechos,
-                        "gdf_cronograma_wgs84": gdf_cronograma_wgs84, "logs_diagnostico": painel_logs
+                        "gdf_cronograma_wgs84": gdf_cronograma.to_crs(epsg=4326),
+                        "rios_wgs84": rios if not rios.empty else None,
+                        "logs_diagnostico": painel_logs
                     }
                 except nx.NetworkXNoPath:
-                    st.error("Sem conexão ferroviária contínua instalada entre as duas cidades nas ferrovias autorizadas.")
+                    st.error("Sem conexão ferroviária contínua instalada entre as duas cidades.")
 
 # --- 6. EXIBIÇÃO EM PAINEL INTELIGENTE ---
 if st.session_state.dados_calculados is not None:
@@ -273,11 +267,6 @@ if st.session_state.dados_calculados is not None:
         col1, col2 = st.columns(2)
         col1.metric("Distância Total nos Trilhos", f"{dados['comprimento_total_km']:.2f} km")
         col2.metric("Média de Deslocamento Diário", f"{(dados['comprimento_total_km'] / dados['num_trechos']):.2f} km/dia")
-        
-        if "logs_diagnostico" in dados:
-            with st.expander("🛠️ Painel de Diagnóstico e Validação Geográfica"):
-                for log in dados["logs_diagnostico"]:
-                    st.markdown(f"**🔹 Camada:** {log['camada']} | **Status:** {log['status']} | **Feições na Rota:** `{log['registros']}`")
         
         st.write("---")
         col_lista, col_mapa = st.columns([4, 5])
@@ -306,29 +295,44 @@ if st.session_state.dados_calculados is not None:
             centro_mapa = gdf_wgs84.unary_union.centroid
             m = folium.Map(location=[centro_mapa.y, centro_mapa.x], zoom_start=8, tiles="CartoDB positron")
             
-            # 1. Desenha os trechos coloridos da ferrovia
+            # NOVO: ADICIONA CAPTURA DE COORDENADAS POR CLIQUE NO MAPA (LatLngPopup)
+            m.add_child(folium.LatLngPopup())
+            
+            # NOVO: SE EXISTIREM RIOS NO CACHE, PLOTA A CAMADA VETORIAL PARA AUDITORIA VISUAL
+            if dados.get("rios_wgs84") is not None:
+                folium.GeoJson(
+                    dados["rios_wgs84"].__geo_interface__,
+                    name="🌊 Rios Principais (Base Parquet)",
+                    style_function=lambda x: {'color': '#1d70b8', 'weight': 2.5, 'opacity': 0.75}
+                ).add_to(m)
+            
+            # Desenha os trechos coloridos da ferrovia
             for idx, row in gdf_wgs84.iterrows():
                 cor = row['cor_rgb']
                 geo_json_features = folium.GeoJson(
                     row['geometry'].__geo_interface__,
+                    name=f"Trilhos - {row['id_dia']}",
                     style_function=lambda x, c=cor: {'color': c, 'weight': 6, 'opacity': 0.9}
                 )
-                popup_html = f"<b>{row['id_dia']}</b><br>Score: {row['score_num']:.2f}<br>Pontes: {len(row['pontes_pontes'])}<br>PNs: {len(row['pn_pontos'])}"
+                popup_html = f"<b>{row['id_dia']}</b><br>Score: {row['score_num']:.2f}<br>Pontes: {len(row['pontes_pontes'])}"
                 folium.Popup(popup_html, max_width=200).add_to(geo_json_features)
                 geo_json_features.add_to(m)
                 
-                # 2. Plotagem dinâmica das Passagens de Nível (Pontos Pretos/Laranjas)
+                # Plotagem das Passagens de Nível
                 for pt in row['pn_pontos']:
                     folium.CircleMarker(
-                        location=pt, radius=4, color='black', fill=True, fill_color='orange', fill_opacity=1,
+                        location=pt, radius=4.5, color='black', fill=True, fill_color='orange', fill_opacity=1,
                         popup="🛣️ Passagem de Nível (Cruzamento Rodoviário)"
                     ).add_to(m)
                     
-                # 3. Plotagem dinâmica das Pontes sobre Rios (Pontos Azuis)
+                # Plotagem das Pontes sobre Rios
                 for pt_rio in row['pontes_pontes']:
                     folium.CircleMarker(
-                        location=pt_rio, radius=4, color='darkblue', fill=True, fill_color='cyan', fill_opacity=1,
+                        location=pt_rio, radius=4.5, color='darkblue', fill=True, fill_color='cyan', fill_opacity=1,
                         popup="🌉 Ponte Ferroviária (Cruzamento de Rio Principal)"
                     ).add_to(m)
+            
+            # Habilita o painel de ligar/desligar camadas no canto do mapa
+            folium.LayerControl(position='topright', collapsed=False).add_to(m)
                 
             st_folium(m, height=580, use_container_width=True)
