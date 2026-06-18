@@ -12,10 +12,10 @@ import os
 st.set_page_config(
     layout="wide", 
     page_title="ViaPrev: Planejador Nacional de Vistoria Ferroviária",
-    page_icon="🚊"
+    page_icon="𚊊"
 )
 
-st.title("🚊 ViaPrev: Planejador de Vistoria Ferroviária com Matriz de Risco")
+st.title("𚊊 ViaPrev: Planejador de Vistoria Ferroviária com Matriz de Risco")
 st.markdown("Análise multicritério interestadual com identificação de Alvos Críticos de 1 km para vistoria in loco.")
 
 # --- 1. INICIALIZAÇÃO DA MEMÓRIA DO APP ---
@@ -258,7 +258,6 @@ if st.sidebar.button("Calcular Rota e Priorizar Trechos", use_container_width=Tr
                             
                             score_micro = ((m_n_ti * w_ti) + (m_n_risco * w_risco) + (m_n_uc * w_uc) + (m_n_setor * w_setores) + (m_n_rio * w_rios)) / soma_pesos
                             
-                            # Montagem limpa e segura do resumo de interferências
                             if m_ucs and m_riscos: resumo = f"🌳 UC: {m_ucs[0][:15]}... | ⚠️ Risco: {m_riscos[0]}"
                             elif m_ucs: resumo = f"🌳 UC: {m_ucs[0][:25]}..."
                             elif m_riscos: resumo = f"⚠️ Risco CPRM: {m_riscos[0]}"
@@ -289,12 +288,11 @@ if st.sidebar.button("Calcular Rota e Priorizar Trechos", use_container_width=Tr
                     gdf_cronograma = gpd.GeoDataFrame(listagem_trechos_diarios, crs="EPSG:5880")
                     gdf_top_micros = gpd.GeoDataFrame(todos_os_top_micros, geometry='geometry', crs="EPSG:5880")
                     
-                    # --- CONFIGURAÇÃO DE ATRIBUTOS PARA SUPORTE A POPUPS NOS PÁTIOS ---
-                    # --- CORREÇÃO CIRÚRGICA: Garante extração de coordenadas via centroide (Evita ValueError) ---
+                    # --- CENTROIDE SEGURO PARA EXTRAÇÃO DE COORDENADAS DOS PÁTIOS ---
                     if not patios.empty:
-                        centroides = patios.geometry.centroid
-                        patios['lat'] = centroides.y.round(5)
-                        patios['lon'] = centroides.x.round(5)
+                        centroides_patios = patios.geometry.centroid
+                        patios['lat'] = centroides_patios.y.round(5)
+                        patios['lon'] = centroides_patios.x.round(5)
                         col_nome_temp = [c for c in patios.columns if 'nome' in c or 'patio' in c or 'oficina' in c]
                         patios['nome_exibicao'] = patios[col_nome_temp[0]].astype(str).str.strip().str.upper() if col_nome_temp else "ESTRUTURA FERROVIÁRIA"
                     
@@ -366,30 +364,31 @@ if st.session_state.dados_calculados is not None:
             
             m.add_child(folium.LatLngPopup())
             
-            # --- MODIFICAÇÃO DE CAMADAS PADRÃO: HIDROGRAFIA ABRE DESLIGADA (show=False) ---
-            df_rios = dados.get("rios_wgs84") if dados.get("rios_wgs84") is not None else gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
-            folium.GeoJson(df_rios, name="💧 Hidrografia (Parquet)", show=False, style_function=lambda x: {'color': '#1d70b8', 'weight': 2}).add_to(m)
+            # --- INCORPORAÇÃO BLINDADA E CONDICIONAL (SÓ ADICIONA SE A BASE NÃO ESTIVER VAZIA) ---
+            df_rios = dados.get("rios_wgs84")
+            if df_rios is not None and not df_rios.empty:
+                folium.GeoJson(df_rios, name="💧 Hidrografia (Parquet)", show=False, style_function=lambda x: {'color': '#1d70b8', 'weight': 2}).add_to(m)
             
-            df_ucs = dados.get("ucs_wgs84") if dados.get("ucs_wgs84") is not None else gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
-            folium.GeoJson(df_ucs, name="🌳 Unidades de Conservação", show=False, style_function=lambda x: {'color': 'green', 'fillColor': 'green', 'fillOpacity': 0.1, 'weight': 1}).add_to(m)
+            df_ucs = dados.get("ucs_wgs84")
+            if df_ucs is not None and not df_ucs.empty:
+                folium.GeoJson(df_ucs, name="🌳 Unidades de Conservação", show=False, style_function=lambda x: {'color': 'green', 'fillColor': 'green', 'fillOpacity': 0.1, 'weight': 1}).add_to(m)
             
-            df_riscos = dados.get("riscos_wgs84") if dados.get("riscos_wgs84") is not None else gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
-            folium.GeoJson(df_riscos, name="⚠️ Áreas de Risco (CPRM)", show=False, style_function=lambda x: {'color': 'orange', 'fillColor': 'yellow', 'fillOpacity': 0.1, 'weight': 1}).add_to(m)
+            df_riscos = dados.get("riscos_wgs84")
+            if df_riscos is not None and not df_riscos.empty:
+                folium.GeoJson(df_riscos, name="⚠️ Áreas de Risco (CPRM)", show=False, style_function=lambda x: {'color': 'orange', 'fillColor': 'yellow', 'fillOpacity': 0.1, 'weight': 1}).add_to(m)
             
-            df_rodovias = dados.get("rodovias_wgs84") if dados.get("rodovias_wgs84") is not None else gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
-            folium.GeoJson(df_rodovias, name="🛣️ Malha Rodoviária", show=False, style_function=lambda x: {'color': '#707070', 'weight': 1.2}).add_to(m)
+            df_rodovias = dados.get("rodovias_wgs84")
+            if df_rodovias is not None and not df_rodovias.empty:
+                folium.GeoJson(df_rodovias, name="🛣️ Malha Rodoviária", show=False, style_function=lambda x: {'color': '#707070', 'weight': 1.2}).add_to(m)
             
-            # --- MODIFICAÇÃO DE CAMADAS PADRÃO: PÁTIOS ABREM LIGADOS (show=True) COM TOOLTIP E POPUP DE COORDENADAS ---
-            df_patios = dados.get("patios_wgs84") if dados.get("patios_wgs84") is not None else gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
-            if not df_patios.empty and 'nome_exibicao' in df_patios.columns:
+            df_patios = dados.get("patios_wgs84")
+            if df_patios is not None and not df_patios.empty:
                 folium.GeoJson(
                     df_patios, name="🏢 Estruturas e Pátios Ferroviários", show=True,
                     style_function=lambda x: {'color': 'black', 'fillColor': 'gray', 'fillOpacity': 0.6, 'weight': 1.5},
                     tooltip=folium.GeoJsonTooltip(fields=['nome_exibicao', 'lat', 'lon'], aliases=['Estrutura: ', 'Lat: ', 'Lon: ']),
                     popup=folium.GeoJsonPopup(fields=['nome_exibicao', 'lat', 'lon'], aliases=['Estrutura: ', 'Lat: ', 'Lon: '])
                 ).add_to(m)
-            else:
-                folium.GeoJson(df_patios, name="🏢 Estruturas e Pátios Ferroviários", show=True, style_function=lambda x: {'color': 'black', 'fillColor': 'gray', 'fillOpacity': 0.4, 'weight': 1.5}).add_to(m)
 
             # 1. Linhas de base por dia
             for idx, row in gdf_wgs84.iterrows():
@@ -414,5 +413,5 @@ if st.session_state.dados_calculados is not None:
             
             folium.LayerControl(position='topright', collapsed=False).add_to(m)
             
-            # --- MODIFICAÇÃO CRÍTICA DE PERFORMANCE: returned_objects=[] CONGELA EXECUTAS REDUNDANTES DE MOVIMENTAÇÃO ---
-            st_folium(m, height=580, use_container_width=True, returned_objects=[])
+            # --- FIX FINAL DE RENDERING E PERFORMANCE: A CHAVE PERSISTENTE DA MUDANÇA ---
+            st_folium(m, height=580, use_container_width=True, key="via_prev_map_canvas", returned_objects=[])
