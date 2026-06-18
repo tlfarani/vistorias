@@ -290,11 +290,15 @@ if st.sidebar.button("Calcular Rota e Priorizar Trechos", use_container_width=Tr
                     gdf_top_micros = gpd.GeoDataFrame(todos_os_top_micros, geometry='geometry', crs="EPSG:5880")
                     
                     # --- CONFIGURAÇÃO DE ATRIBUTOS PARA SUPORTE A POPUPS NOS PÁTIOS ---
+                    # --- CORREÇÃO CIRÚRGICA: Garante extração de coordenadas via centroide (Evita ValueError) ---
                     if not patios.empty:
-                        patios['lat'] = patios.geometry.y.round(5)
-                        patios['lon'] = patios.geometry.x.round(5)
+                        centroides = patios.geometry.centroid
+                        patios['lat'] = centroides.y.round(5)
+                        patios['lon'] = centroides.x.round(5)
                         col_nome_temp = [c for c in patios.columns if 'nome' in c or 'patio' in c or 'oficina' in c]
-                        patios['nome_exibicao'] = patios[col_nome_temp[0]].str.strip().str.upper() if col_nome_temp else "ESTRUTURA FERROVIÁRIA"
+                        patios['nome_exibicao'] = patios[col_nome_temp[0]].astype(str).str.strip().str.upper() if col_nome_temp else "ESTRUTURA FERROVIÁRIA"
+                    
+                    st.session_state.dados_calculados = {
                     
                     st.session_state.dados_calculados = {
                         "muni_origem": muni_origem, "muni_destino": muni_destino,
