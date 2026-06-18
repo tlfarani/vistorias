@@ -11,7 +11,7 @@ import os
 # Configuração da página do Streamlit
 st.set_page_config(
     layout="wide", 
-    page_title="Planejador Nacional de Vistoria Ferroviária",
+    page_title="ViaPrev: Planejador Nacional de Vistoria Ferroviária",
     page_icon="🚊"
 )
 
