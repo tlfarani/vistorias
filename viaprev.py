@@ -96,20 +96,30 @@ def carregar_camada_com_telemetria(caminho_parquet, bbox_wgs84, nome_camada):
 def otimizar_camada_para_mapa(gdf, corredor, tipo_esperado="polygon"):
     if gdf is None or gdf.empty:
         return None
-    sub_gdf = gdf[gdf.intersects(corredor)].copy()
-    if sub_gdf.empty:
-        return None
-    sub_gdf['geometry'] = sub_gdf.geometry.intersection(corredor)
-    sub_gdf['geometry'] = sub_gdf.geometry.make_valid()
-    sub_gdf = sub_gdf[~sub_gdf.geometry.is_empty]
-    
-    if tipo_esperado == "polygon":
-        sub_gdf = sub_gdf[sub_gdf.geometry.type.isin(['Polygon', 'MultiPolygon'])]
-    elif tipo_esperado == "line":
-        sub_gdf = sub_gdf[sub_gdf.geometry.type.isin(['LineString', 'MultiLineString'])]
+        
+    # Usamos o gpd.clip que corta linhas e polígonos perfeitamente sem corromper os tipos primitivos
+    try:
+        sub_gdf = gpd.clip(gdf, corredor)
+    except Exception:
+        # Fallback de segurança em caso de desalinhamento topológico
+        sub_gdf = gdf[gdf.intersects(corredor)].copy()
+        sub_gdf['geometry'] = sub_gdf.geometry.intersection(corredor)
         
     if sub_gdf.empty:
         return None
+        
+    sub_gdf['geometry'] = sub_gdf.geometry.make_valid()
+    sub_gdf = sub_gdf[~sub_gdf.geometry.is_empty]
+    
+    # Filtro expandido para aceitar coleções hígidas remanescentes
+    if tipo_esperado == "polygon":
+        sub_gdf = sub_gdf[sub_gdf.geometry.type.isin(['Polygon', 'MultiPolygon', 'GeometryCollection'])]
+    elif tipo_esperado == "line":
+        sub_gdf = sub_gdf[sub_gdf.geometry.type.isin(['LineString', 'MultiLineString', 'GeometryCollection'])]
+        
+    if sub_gdf.empty:
+        return None
+        
     sub_gdf['geometry'] = sub_gdf.geometry.simplify(0.0003, preserve_topology=True)
     return sub_gdf if not sub_gdf.empty else None
 
