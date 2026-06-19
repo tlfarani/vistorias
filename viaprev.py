@@ -97,11 +97,9 @@ def otimizar_camada_para_mapa(gdf, corredor, tipo_esperado="polygon"):
     if gdf is None or gdf.empty:
         return None
         
-    # Usamos o gpd.clip que corta linhas e polígonos perfeitamente sem corromper os tipos primitivos
     try:
         sub_gdf = gpd.clip(gdf, corredor)
     except Exception:
-        # Fallback de segurança em caso de desalinhamento topológico
         sub_gdf = gdf[gdf.intersects(corredor)].copy()
         sub_gdf['geometry'] = sub_gdf.geometry.intersection(corredor)
         
@@ -111,11 +109,14 @@ def otimizar_camada_para_mapa(gdf, corredor, tipo_esperado="polygon"):
     sub_gdf['geometry'] = sub_gdf.geometry.make_valid()
     sub_gdf = sub_gdf[~sub_gdf.geometry.is_empty]
     
-    # Filtro expandido para aceitar coleções hígidas remanescentes
+    # 🌟 O SEGREDO DO SUCESSO: Desmembro coleções e formatos mistos em linhas atômicas isoladas
+    sub_gdf = sub_gdf.explode(index_parts=True)
+    
+    # Filtragem estrita de primitivos puros para o Folium/Navegador não engasgar
     if tipo_esperado == "polygon":
-        sub_gdf = sub_gdf[sub_gdf.geometry.type.isin(['Polygon', 'MultiPolygon', 'GeometryCollection'])]
+        sub_gdf = sub_gdf[sub_gdf.geometry.type.isin(['Polygon', 'MultiPolygon'])]
     elif tipo_esperado == "line":
-        sub_gdf = sub_gdf[sub_gdf.geometry.type.isin(['LineString', 'MultiLineString', 'GeometryCollection'])]
+        sub_gdf = sub_gdf[sub_gdf.geometry.type.isin(['LineString', 'MultiLineString'])]
         
     if sub_gdf.empty:
         return None
